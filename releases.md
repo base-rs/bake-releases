@@ -1,5 +1,9 @@
 # Releases
 
+## v0.3.5
+
+- Use `core-markdown` in place of `socketry-markdown`.
+
 ## v0.3.4
 
 - Clarify root task exports, installation, and the shared release process.

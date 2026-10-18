@@ -20,7 +20,7 @@ cargo bake releases:update v0.1.0
 cargo bake releases:notes v0.1.0 --path releases.md
 ```
 
-This crate only manages the Markdown release document. Cargo publication and GitHub release creation are provided by [Bake Cargo](https://github.com/socketry/bake-cargo-rust).
+This crate only manages the Markdown release document. Cargo publication and GitHub release creation are provided by [Bake Cargo](https://github.com/core-rs/bake-cargo).
 
 ## Document format
 
@@ -34,13 +34,17 @@ These tasks do not modify Cargo versions, create a new Unreleased section, commi
 
 ## Releasing
 
-Prepare a release with `cargo bake cargo:version:patch` (or `minor`, `major`, or `bump --version X.Y.Z`), then run `cargo bake cargo:release` and open a pull request. After review and merge, GitHub Actions publishes the release when the configured `crates-io` environment approves it. Follow the shared [Releasing skill](https://github.com/socketry/socketry-project-rust/blob/main/context/releasing.md) for the standard process.
+Prepare a release with `cargo bake cargo:version:patch` (or `minor`, `major`, or `bump --version X.Y.Z`), commit with a `Release: vVERSION` trailer, then run `cargo bake cargo:release` and open a pull request. After review and merge, GitHub Actions publishes the release when the configured `crates-io` environment approves it. Follow the shared [Releasing skill](https://github.com/core-rs/core-project/blob/main/context/releasing.md) for the standard process.
 
 ## Releases
 
 <!-- bake-readme:releases:start -->
 
 See [releases.md](releases.md) for the full release history.
+
+### v0.3.5
+
+- Use `core-markdown` in place of `socketry-markdown`.
 
 ### v0.3.4
 
@@ -54,24 +58,20 @@ See [releases.md](releases.md) for the full release history.
 
 - Require the aggregate test and coverage result for pull request merges.
 
-### v0.3.2
-
-- Require Bake 0.18 or newer so task libraries share their project's active task registry.
-- Document shared agent context setup and contribution guidance.
-
 <!-- bake-readme:releases:end -->
 
 ## See Also
 
-- [`bake`](https://github.com/socketry/bake-rust).
-- [`bake-cargo`](https://github.com/socketry/bake-cargo-rust).
+- [`bake`](https://github.com/core-rs/bake).
+
+- [`bake-cargo`](https://github.com/core-rs/bake-cargo).
 
 ## Contributing
 
-Please open an issue or pull request on [GitHub](https://github.com/socketry/bake-releases-rust).
+Please open an issue or pull request on [GitHub](https://github.com/core-rs/bake-releases).
 
 ### Agent Context
 
 Run `cargo bake agent:context:install` to install shared context and skills. Read `.agents/context/index.md` to find relevant guides, follow `agents.md` if present, and apply skills under `.agents/skills/`. The installer preserves repository-owned `agents.md`; it does not create or regenerate that file.
 
-[Agent Context guide]: https://github.com/socketry/bake-agent-context-rust/blob/main/context/agent-context.md
+[Agent Context guide]: https://github.com/core-rs/bake-agent-context/blob/main/context/agent-context.md
