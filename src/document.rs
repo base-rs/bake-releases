@@ -2,7 +2,7 @@
 // Copyright, 2026, by Samuel Williams.
 
 use bake::{Error, Result};
-use socketry_markdown::{ParseOptions, mdast::Node, to_mdast};
+use core_markdown::{ParseOptions, mdast::Node, to_mdast};
 use std::fmt::Display;
 use std::ops::Range;
 
@@ -28,7 +28,7 @@ fn after_heading_line(document: &str, offset: usize) -> usize {
 
 fn plain_title_range(
     document: &str,
-    heading: &socketry_markdown::mdast::Heading,
+    heading: &core_markdown::mdast::Heading,
 ) -> Option<Range<usize>> {
     let [Node::Text(text)] = heading.children.as_slice() else {
         return None;
@@ -205,7 +205,7 @@ fn update_document_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use socketry_markdown::{
+    use core_markdown::{
         mdast::{Heading as MarkdownHeading, Text},
         unist::Position,
     };
