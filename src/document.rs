@@ -2,8 +2,10 @@
 // Copyright, 2026, by Samuel Williams.
 
 use bake::{Error, Result};
-use core_markdown::{ParseOptions, mdast::Node, to_mdast};
-use std::fmt::Display;
+use core_markdown::{
+    Document, NodeId, ParseOptions,
+    stream::{EventKind, Tag, Text},
+};
 use std::ops::Range;
 
 struct Heading {
@@ -14,116 +16,55 @@ struct Heading {
     body_start: usize,
 }
 
-fn after_heading_line(document: &str, offset: usize) -> usize {
-    let rest = document.get(offset..).unwrap_or_default();
-
-    if rest.starts_with("\r\n") {
-        offset + 2
-    } else if rest.starts_with('\r') || rest.starts_with('\n') {
-        offset + 1
-    } else {
-        offset
+fn plain_title_range(document: &Document<&str>, id: NodeId) -> Option<Range<usize>> {
+    let mut children = document.children(id);
+    let child = children.next()?;
+    if children.next().is_some() {
+        return None;
     }
-}
-
-fn plain_title_range(
-    document: &str,
-    heading: &core_markdown::mdast::Heading,
-) -> Option<Range<usize>> {
-    let [Node::Text(text)] = heading.children.as_slice() else {
+    let EventKind::Text(Text::Source(range)) = &document.node(child).unwrap().kind else {
         return None;
     };
-    let position = text.position.as_ref()?;
-    let title = chomp_line_ending(&text.value);
-    let mut end = position.end.offset;
-    let prefix = document.get(..end)?;
-    if prefix.ends_with("\r\n") {
-        end -= 2;
-    } else if prefix.ends_with('\r') || prefix.ends_with('\n') {
-        end -= 1;
-    }
-    let range = position.start.offset..end;
-    (document.get(range.clone())? == title).then_some(range)
+    let value = &document.source()[range.clone()];
+    Some(range.start..range.start + chomp_line_ending(value).len())
 }
 
-fn heading_from_node(document: &str, node: &Node) -> Option<Heading> {
-    let Node::Heading(heading) = node else {
+fn heading_from_node(document: &Document<&str>, id: NodeId) -> Option<Heading> {
+    let node = document.node(id).unwrap();
+    let EventKind::Start(Tag::Heading(level)) = node.kind else {
         return None;
     };
-    let position = heading.position.as_ref()?;
-    let start = position.start.offset;
-
-    // Replacements operate on single-line ATX release headings. The parser
-    // has already distinguished headings from fences and other Markdown.
-    if position.start.column != 1
-        || !document
-            .get(start..)
-            .is_some_and(|rest| rest.starts_with('#'))
+    let source = document.source();
+    let start = node.span.start;
+    // Release section boundaries use only unindented ATX headings at document level.
+    if (start != 0 && !matches!(source.as_bytes()[start - 1], b'\r' | b'\n'))
+        || !source[start..].starts_with('#')
     {
         return None;
     }
-
     Some(Heading {
-        level: heading.depth,
-        title: chomp_line_ending(&node.text_content()).to_owned(),
-        title_range: plain_title_range(document, heading),
+        level,
+        title: chomp_line_ending(&document.text_content(id)).to_owned(),
+        title_range: plain_title_range(document, id),
         start,
-        body_start: after_heading_line(document, position.end.offset),
+        body_start: node.span.end,
     })
 }
 
 fn chomp_line_ending(text: &str) -> &str {
     text.strip_suffix("\r\n")
-        .or_else(|| text.strip_suffix('\n'))
-        .or_else(|| text.strip_suffix('\r'))
+        .or_else(|| text.strip_suffix(['\r', '\n']))
         .unwrap_or(text)
 }
 
-fn markdown_parse_error(error: impl Display) -> Error {
-    Error::new(format!("could not parse release Markdown: {error}"))
-}
-
-fn missing_document_children_error() -> Error {
-    Error::new("parsed release Markdown has no document children")
-}
-
-fn document_children(root: &Node) -> Result<&[Node]> {
-    root.children()
-        .map(Vec::as_slice)
-        .ok_or_else(missing_document_children_error)
-}
-
-fn map_parse_result(result: std::result::Result<Node, impl Display>) -> Result<Node> {
-    result.map_err(markdown_parse_error)
-}
-
-// Release documents use unindented ATX headings. Restricting section boundaries
-// to document children excludes headings inside lists and block quotes.
-fn headings(document: &str) -> Result<Vec<Heading>> {
-    headings_with(document, |document| {
-        to_mdast(document, &ParseOptions::default())
-    })
-}
-
-fn headings_with<E: Display>(
-    document: &str,
-    parse: impl FnOnce(&str) -> std::result::Result<Node, E>,
-) -> Result<Vec<Heading>> {
-    let root = map_parse_result(parse(document))?;
-    headings_from_root(document, &root)
-}
-
-fn headings_from_root(document: &str, root: &Node) -> Result<Vec<Heading>> {
-    let children = document_children(root)?;
-    let mut headings = Vec::new();
-
-    for node in children {
-        if let Some(heading) = heading_from_node(document, node) {
-            headings.push(heading);
-        }
-    }
-
-    Ok(headings)
+// Restricting section boundaries to document children excludes headings in lists and quotes.
+fn headings(source: &str) -> Vec<Heading> {
+    let document = Document::parse(source, &ParseOptions::default())
+        .expect("the built-in Markdown parser produces a valid document");
+    document
+        .children(document.root())
+        .filter_map(|id| heading_from_node(&document, id))
+        .collect()
 }
 
 fn unique_heading<'headings>(
@@ -148,15 +89,7 @@ fn unique_heading<'headings>(
 /// Headings must be unindented, e.g. `## v0.1.0`. Setext headings, HTML blocks,
 /// and headings inside block quotes or lists are outside this document format.
 pub fn extract_notes<'document>(document: &'document str, version: &str) -> Result<&'document str> {
-    extract_notes_with(document, version, headings(document))
-}
-
-fn extract_notes_with<'document>(
-    document: &'document str,
-    version: &str,
-    result: Result<Vec<Heading>>,
-) -> Result<&'document str> {
-    let headings = result?;
+    let headings = headings(document);
     let heading = unique_heading(&headings, version)?;
     let end = headings
         .iter()
@@ -168,14 +101,6 @@ fn extract_notes_with<'document>(
 /// Replace exactly one `Unreleased` heading without reformatting the document.
 /// Existing version headings and multiline version strings are rejected.
 pub fn update_document(document: &str, version: &str) -> Result<String> {
-    update_document_with(document, version, headings)
-}
-
-fn update_document_with(
-    document: &str,
-    version: &str,
-    get_headings: impl FnOnce(&str) -> Result<Vec<Heading>>,
-) -> Result<String> {
     if version.is_empty()
         || version.trim() != version
         || version.chars().any(char::is_control)
@@ -186,7 +111,7 @@ fn update_document_with(
             "version must be a nonempty single-line heading other than Unreleased, without # characters",
         ));
     }
-    let headings = get_headings(document)?;
+    let headings = headings(document);
     if headings.iter().any(|heading| heading.title == version) {
         return Err(Error::new(format!(
             "release heading {version:?} already exists"
@@ -205,119 +130,64 @@ fn update_document_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_markdown::{
-        mdast::{Heading as MarkdownHeading, Text},
-        unist::Position,
-    };
 
     #[test]
-    fn heading_line_offsets_cover_line_endings_and_invalid_offsets() {
-        assert_eq!(after_heading_line("text\r\n", 4), 6);
-        assert_eq!(after_heading_line("text\r", 4), 5);
-        assert_eq!(after_heading_line("text\n", 4), 5);
-        assert_eq!(after_heading_line("text", 10), 10);
-    }
-
-    #[test]
-    fn title_ranges_chomp_line_endings() {
-        for ending in ["\r\n", "\r", "\n"] {
-            let value = format!("title{ending}");
-            let document = value.clone();
-            let end_offset = value.len();
-            let heading = MarkdownHeading {
-                children: vec![Node::Text(Text {
-                    value,
-                    position: Some(Position::new(1, 1, 0, 2, 1, end_offset)),
-                })],
-                position: None,
-                depth: 2,
-            };
-
-            assert_eq!(plain_title_range(&document, &heading), Some(0..5));
+    fn preserves_source_offsets_and_plain_title_ranges_for_every_line_ending() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let source = "# Releases\n\n## Unreleased\n\nNotes.\n".replace('\n', ending);
+            let parsed = headings(&source);
+            let heading = &parsed[1];
+            assert_eq!(&source[heading.title_range.clone().unwrap()], "Unreleased");
+            assert_eq!(
+                &source[heading.start..heading.body_start],
+                format!("## Unreleased{ending}")
+            );
+            assert_eq!(
+                extract_notes(&source, "Unreleased").unwrap(),
+                format!("{ending}Notes.{ending}")
+            );
+            let updated = update_document(&source, "v0.2.0").unwrap();
+            assert_eq!(updated, source.replacen("Unreleased", "v0.2.0", 1));
         }
     }
 
     #[test]
-    fn title_ranges_reject_missing_positions_and_invalid_offsets() {
-        let missing_position = MarkdownHeading {
-            children: vec![Node::Text(Text {
-                value: "title".into(),
-                position: None,
-            })],
-            position: None,
-            depth: 2,
-        };
-        assert!(plain_title_range("title", &missing_position).is_none());
-
-        let invalid_end = MarkdownHeading {
-            children: vec![Node::Text(Text {
-                value: "title".into(),
-                position: Some(Position::new(1, 1, 0, 2, 1, 99)),
-            })],
-            position: None,
-            depth: 2,
-        };
-        assert!(plain_title_range("title", &invalid_end).is_none());
-
-        let invalid_range = MarkdownHeading {
-            children: vec![Node::Text(Text {
-                value: "title".into(),
-                position: Some(Position::new(1, 1, 99, 1, 6, 5)),
-            })],
-            position: None,
-            depth: 2,
-        };
-        assert!(plain_title_range("title", &invalid_range).is_none());
+    fn empty_headings_have_no_plain_title_range() {
+        let parsed = headings("##\n\nBody.\n");
+        assert_eq!(parsed[0].title, "");
+        assert!(parsed[0].title_range.is_none());
+        assert_eq!(extract_notes("##\n\nBody.\n", "").unwrap(), "\nBody.\n");
     }
 
     #[test]
-    fn headings_without_positions_are_ignored() {
-        let node = Node::Heading(MarkdownHeading {
-            children: vec![Node::Text(Text {
-                value: "Unreleased".into(),
-                position: None,
-            })],
-            position: None,
-            depth: 2,
-        });
-
-        assert!(heading_from_node("## Unreleased\n", &node).is_none());
-    }
-
-    #[test]
-    fn reports_markdown_parser_errors_and_non_document_roots() {
-        assert!(headings_with("invalid Markdown", |_| Err("parser failed")).is_err());
-
-        let error = markdown_parse_error("invalid Markdown");
-        assert!(
-            error
-                .to_string()
-                .contains("could not parse release Markdown")
-        );
-
-        assert!(
-            document_children(&Node::Text(Text {
-                value: "not a document".into(),
-                position: None,
-            }))
-            .is_err()
-        );
-        assert!(
-            headings_from_root(
-                "not a document",
-                &Node::Text(Text {
-                    value: "not a document".into(),
-                    position: None,
-                })
-            )
-            .is_err()
+    fn preserves_single_line_atx_section_rules() {
+        let source = "# Releases\n\n  ## Indented\n\nSetext\n------\n\n> ## Quoted\n\n- ## Listed\n\n```\n## Fenced\n```\n\n## Real\n";
+        let parsed = headings(source);
+        assert_eq!(
+            parsed
+                .iter()
+                .map(|heading| heading.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Releases", "Real"]
         );
     }
 
     #[test]
-    fn note_and_update_helpers_propagate_parser_errors() {
-        let error = |_: &str| Err(Error::new("parser failed"));
-        assert!(extract_notes_with("## v1\n", "v1", error("## v1\n")).is_err());
-        assert!(update_document_with("## Unreleased\n", "v1", error).is_err());
+    fn extracts_formatted_titles_but_requires_plain_titles_for_replacement() {
+        for title in [
+            "**Unreleased**",
+            "Unreleas&#101;d",
+            "`Unreleased`",
+            "[Unreleased](/url)",
+        ] {
+            let source = format!("## {title}\n\nNotes.\n");
+            assert_eq!(extract_notes(&source, "Unreleased").unwrap(), "\nNotes.\n");
+            assert!(
+                update_document(&source, "v0.2.0")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("plain text title")
+            );
+        }
     }
 }
