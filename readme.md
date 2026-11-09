@@ -42,6 +42,10 @@ Prepare a release with `cargo bake cargo:release:patch` (or `minor`, `major`, or
 
 See [releases.md](releases.md) for the full release history.
 
+### v0.3.9
+
+- Require `bake` 0.20 or later, instead of 0.18 or later, so that Cargo resolves this crate to the same `bake` as a task package that requires `bake` 0.20.2. In a workspace whose `rust-version` is below the 1.88 that `bake` 0.20.2 declares, Cargo resolved the old requirement to `bake` 0.19.2, which declares none, and the task package failed to compile against two `bake` versions.
+
 ### v0.3.8
 
 - Declare Rust 1.88 as the minimum supported version in `rust-version`, as required by the let-chains in `bake` 0.20.
@@ -49,10 +53,6 @@ See [releases.md](releases.md) for the full release history.
 ### v0.3.7
 
 - Depend on `base-markdown` under the `base-rs` organization, replacing `core-markdown`.
-
-### v0.3.6
-
-- Migrate to the source-backed `core-markdown` document AST, preserving supported Markdown behavior and source bytes.
 
 <!-- bake-readme:releases:end -->
 
