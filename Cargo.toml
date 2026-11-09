@@ -2,6 +2,7 @@
 name = "bake-releases"
 version = "0.3.7"
 edition = "2024"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/base-rs/bake-releases"
 description = "Reusable releases.md tasks for Bake"
