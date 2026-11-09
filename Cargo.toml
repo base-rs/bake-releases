@@ -24,7 +24,7 @@ name = "bake_releases"
 
 [dependencies]
 base-markdown = "0.1.0"
-bake = ">=0.18.0"
+bake = ">=0.20.0"
 tempfile = "3.27"
 
 [patch.crates-io]
