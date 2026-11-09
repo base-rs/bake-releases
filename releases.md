@@ -1,5 +1,9 @@
 # Releases
 
+## Unreleased
+
+- Declare Rust 1.88 as the minimum supported version in `rust-version`, as required by the let-chains in `bake` 0.20.
+
 ## v0.3.7
 
 - Depend on `base-markdown` under the `base-rs` organization, replacing `core-markdown`.
