@@ -50,7 +50,7 @@ notes returns the body beneath the selected heading until the next heading of th
 
 update inserts the new section before the first `##` heading, or at the end. It rejects an existing release heading, duplicate Unreleased sections, and invalid multiline titles. The rest of the file is preserved, and the new section uses the file's line endings. A temporary file in the same directory is written and synchronized before replacing the original, preserving file permissions. Existing symlinks are followed. As with other file editors, concurrent external edits are not merged and replacing a file changes its identity for hard links.
 
-These tasks do not modify Cargo versions, commit, tag, or publish releases. The pure `extract_notes`, `render_section` and `update_document` functions, with `Notes` and `Commit`, are also available for direct library use.
+These tasks do not modify Cargo versions, commit, tag, or publish releases. The pure `extract_notes`, `render_section` and `insert_notes` functions, with `Notes` and `Commit`, are also available for direct library use. `update_document`, which only renames `## Unreleased`, is deprecated.
 
 ## Releasing
 

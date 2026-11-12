@@ -10,7 +10,9 @@ mod document;
 mod history;
 mod project;
 
-pub use document::{Commit, Notes, extract_notes, render_section, update_document};
+#[allow(deprecated)]
+pub use document::update_document;
+pub use document::{Commit, Notes, extract_notes, insert_notes, render_section};
 
 use bake::{Context, Error, Result, Value};
 use history::Version;
@@ -205,7 +207,7 @@ pub fn update(
         repository,
     };
     let generated = generate(context, Some(&version), "HEAD", options)?.require_commits()?;
-    let updated = update_document(&document, &version, &generated.notes)?;
+    let updated = insert_notes(&document, &version, &generated.notes)?;
     let directory = path.parent().unwrap_or(path.as_path());
     update_file_with(directory, &path, &updated, &mut SystemUpdateIo)
 }
@@ -283,7 +285,7 @@ pub fn verify(
         repository,
     };
     let generated = generate(context, Some(&version), &parent, options)?.require_commits()?;
-    let regenerated = update_document(
+    let regenerated = insert_notes(
         &history::file_at(context, &parent, &path)?,
         &version,
         &generated.notes,

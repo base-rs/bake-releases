@@ -10,7 +10,7 @@ These details differ from, or settle, the proposal below:
 - Detection is `releases:verify VERSION --sha CANDIDATE`, which bake-cargo's `cargo:release:detect` calls. It regenerates from the candidate's first parent and compares normalized Markdown, since the hook runs `markdown:normalize` after writing.
 - Generated sections are already normalized, so the hook leaves them unchanged. Subjects stay verbatim apart from the escapes the normalizer adds, such as `\*`.
 - A **Changes** lead-in follows the breaking changes, because two lists separated only by a blank line are one list in Markdown. Kept `## Unreleased` entries continue the generated list.
-- `update_document(document, version, notes)` takes `Notes`, built by `Notes::from_commits(commits, repository)`; `render_section(commits, repository)` is the pure renderer.
+- The new section is written by `insert_notes(document, version, notes)`, with `Notes` built by `Notes::from_commits(commits, repository)`; `render_section(commits, repository)` is the pure renderer. `update_document(document, version)` keeps its signature and is deprecated, so this ships as a compatible 0.3 release: bake-cargo requires `bake-releases` 0.3, and a 0.4 beside base-project's open-ended requirement would link two copies whose tasks collide.
 
 ## The problem
 

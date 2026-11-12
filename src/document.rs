@@ -4,14 +4,29 @@
 use bake::{Error, Result};
 use base_markdown::{
     Document, NodeId, ParseOptions,
-    stream::{EventKind, Tag},
+    stream::{EventKind, Tag, Text},
 };
+use std::ops::Range;
 
 struct Heading {
     level: u8,
     title: String,
+    title_range: Option<Range<usize>>,
     start: usize,
     body_start: usize,
+}
+
+fn plain_title_range(document: &Document<&str>, id: NodeId) -> Option<Range<usize>> {
+    let mut children = document.children(id);
+    let child = children.next()?;
+    if children.next().is_some() {
+        return None;
+    }
+    let EventKind::Text(Text::Source(range)) = &document.node(child).unwrap().kind else {
+        return None;
+    };
+    let value = &document.source()[range.clone()];
+    Some(range.start..range.start + chomp_line_ending(value).len())
 }
 
 fn heading_from_node(document: &Document<&str>, id: NodeId) -> Option<Heading> {
@@ -30,6 +45,7 @@ fn heading_from_node(document: &Document<&str>, id: NodeId) -> Option<Heading> {
     Some(Heading {
         level,
         title: chomp_line_ending(&document.text_content(id)).to_owned(),
+        title_range: plain_title_range(document, id),
         start,
         body_start: node.span.end,
     })
@@ -239,14 +255,8 @@ fn line_ending(document: &str) -> &'static str {
     }
 }
 
-/// Insert a `## {version}` section holding `notes` before the first `##`
-/// heading, or at the end, preserving every other byte of the document.
-///
-/// An existing `## Unreleased` section is replaced: its body is kept between
-/// the breaking changes and the entries, so hand-written notes from before
-/// generated notes are not lost. Existing version headings, duplicate
-/// `Unreleased` sections, empty notes and multiline versions are rejected.
-pub fn update_document(document: &str, version: &str, notes: &Notes) -> Result<String> {
+/// Check that `version` is a valid new heading in a document with `headings`.
+fn validate_version(headings: &[Heading], version: &str) -> Result<()> {
     if version.is_empty()
         || version.trim() != version
         || version.chars().any(char::is_control)
@@ -257,12 +267,42 @@ pub fn update_document(document: &str, version: &str, notes: &Notes) -> Result<S
             "version must be a nonempty single-line heading other than Unreleased, without # characters",
         ));
     }
-    let headings = headings(document);
     if headings.iter().any(|heading| heading.title == version) {
         return Err(Error::new(format!(
             "release heading {version:?} already exists"
         )));
     }
+    Ok(())
+}
+
+/// Replace exactly one `Unreleased` heading without reformatting the document.
+/// Existing version headings and multiline version strings are rejected.
+#[deprecated(
+    note = "release notes are generated from Git history; use `insert_notes`, which keeps an existing `## Unreleased` body"
+)]
+pub fn update_document(document: &str, version: &str) -> Result<String> {
+    let headings = headings(document);
+    validate_version(&headings, version)?;
+    let heading = unique_heading(&headings, "Unreleased")?;
+    let title_range = heading
+        .title_range
+        .as_ref()
+        .ok_or_else(|| Error::new("Unreleased heading must have a plain text title"))?;
+    let mut output = document.to_owned();
+    output.replace_range(title_range.clone(), version);
+    Ok(output)
+}
+
+/// Insert a `## {version}` section holding `notes` before the first `##`
+/// heading, or at the end, preserving every other byte of the document.
+///
+/// An existing `## Unreleased` section is replaced: its body is kept between
+/// the breaking changes and the entries, so hand-written notes from before
+/// generated notes are not lost. Existing version headings, duplicate
+/// `Unreleased` sections, empty notes and multiline versions are rejected.
+pub fn insert_notes(document: &str, version: &str, notes: &Notes) -> Result<String> {
+    let headings = headings(document);
+    validate_version(&headings, version)?;
     let mut unreleased = headings
         .iter()
         .filter(|heading| heading.title == "Unreleased");
@@ -343,13 +383,33 @@ mod tests {
                 extract_notes(&source, "Unreleased").unwrap(),
                 format!("{ending}Notes.{ending}{ending}")
             );
-            let updated = update_document(&source, "v0.2.0", &notes(&["New."])).unwrap();
+            let updated = insert_notes(&source, "v0.2.0", &notes(&["New."])).unwrap();
             assert_eq!(
                 updated,
                 "# Releases\n\n## v0.2.0\n\nNotes.\n\n- New.\n\n## v0.1.0\n\nOld.\n"
                     .replace('\n', ending)
             );
         }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn renames_unreleased_with_plain_title_ranges_for_every_line_ending() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let source = "# Releases\n\n## Unreleased\n\nNotes.\n".replace('\n', ending);
+            let heading = &headings(&source)[1];
+            assert_eq!(&source[heading.title_range.clone().unwrap()], "Unreleased");
+            let updated = update_document(&source, "v0.2.0").unwrap();
+            assert_eq!(updated, source.replacen("Unreleased", "v0.2.0", 1));
+        }
+        assert!(headings("##\n").first().unwrap().title_range.is_none());
+        for title in ["**Unreleased**", "`Unreleased`", "[Unreleased](/url)"] {
+            let source = format!("## {title}\n\nNotes.\n");
+            let error = update_document(&source, "v0.2.0").unwrap_err();
+            assert!(error.to_string().contains("plain text title"));
+        }
+        assert!(update_document("## v0\n", "v1").is_err());
+        assert!(update_document("## Unreleased\n", "v1#").is_err());
     }
 
     #[test]
@@ -383,7 +443,7 @@ mod tests {
             let source = format!("## {title}\n\nNotes.\n");
             assert_eq!(extract_notes(&source, "Unreleased").unwrap(), "\nNotes.\n");
             assert_eq!(
-                update_document(&source, "v0.2.0", &notes(&["New."])).unwrap(),
+                insert_notes(&source, "v0.2.0", &notes(&["New."])).unwrap(),
                 "## v0.2.0\n\nNotes.\n\n- New.\n"
             );
         }

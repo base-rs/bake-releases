@@ -1,7 +1,7 @@
 // Released under the MIT License.
 // Copyright, 2026, by Samuel Williams.
 
-use bake_releases::{Notes, extract_notes, update_document};
+use bake_releases::{Notes, extract_notes, insert_notes};
 use std::fs;
 
 fn notes(entries: &[&str]) -> Notes {
@@ -30,7 +30,7 @@ fn ignores_headings_in_fenced_code() {
         let document = format!("## v1.0.0\n{body}## v0.1.0\nOlder\n");
         assert_eq!(extract_notes(&document, "v1.0.0").unwrap(), body);
         assert_eq!(
-            update_document(&document, "v2.0.0", &notes(&["New."])).unwrap(),
+            insert_notes(&document, "v2.0.0", &notes(&["New."])).unwrap(),
             format!("## v2.0.0\n\n- New.\n\n{document}")
         );
     }
@@ -76,7 +76,7 @@ fn inserts_the_section_before_the_first_release_heading() {
             "# Releases\n\n### Notes\n\n## v1\n\n- Two.\n- One.\n\n## v0\n",
         ),
     ] {
-        assert_eq!(update_document(document, "v1", &notes).unwrap(), expected);
+        assert_eq!(insert_notes(document, "v1", &notes).unwrap(), expected);
     }
 }
 
@@ -88,11 +88,11 @@ fn keeps_the_unreleased_body_between_breaking_changes_and_entries() {
     };
     let document = "# Releases\n\n## Unreleased\n\n- Hand-written.\n\n### Detail\n\nMore.\n\n\n## v0\n\nOld.\n";
     assert_eq!(
-        update_document(document, "v1", &notes).unwrap(),
+        insert_notes(document, "v1", &notes).unwrap(),
         "# Releases\n\n## v1\n\n**Breaking changes**\n\n- Drop `a`.\n\n**Changes**\n\n- Hand-written.\n\n### Detail\n\nMore.\n\n- Generated.\n\n## v0\n\nOld.\n"
     );
     assert_eq!(
-        update_document("## Unreleased\n\n- Only.\n", "v1", &Notes::default()).unwrap(),
+        insert_notes("## Unreleased\n\n- Only.\n", "v1", &Notes::default()).unwrap(),
         "## v1\n\n- Only.\n"
     );
 }
@@ -101,7 +101,7 @@ fn keeps_the_unreleased_body_between_breaking_changes_and_entries() {
 fn updates_preserve_crlf_and_unicode() {
     let document = "# Releases\r\n\r\n## Unreleased ##\r\n\r\nこんにちは\r\n\r\n## v0\r\nOld\r\n";
     assert_eq!(
-        update_document(document, "v1", &notes(&["さようなら"])).unwrap(),
+        insert_notes(document, "v1", &notes(&["さようなら"])).unwrap(),
         "# Releases\r\n\r\n## v1\r\n\r\nこんにちは\r\n\r\n- さようなら\r\n\r\n## v0\r\nOld\r\n"
     );
 }
@@ -111,19 +111,19 @@ fn invalid_updates_leave_no_result() {
     let entries = notes(&["New."]);
     for version in ["", "Unreleased", " v1", "v1 ", "v1\n## Bad", "v1\0", "v1#"] {
         assert!(
-            update_document("## Unreleased\n", version, &entries).is_err(),
+            insert_notes("## Unreleased\n", version, &entries).is_err(),
             "{version:?}"
         );
     }
-    assert!(update_document("## Unreleased\n## v1\n", "v1", &entries).is_err());
+    assert!(insert_notes("## Unreleased\n## v1\n", "v1", &entries).is_err());
     assert!(
-        update_document("## Unreleased\n## Unreleased\n", "v1", &entries)
+        insert_notes("## Unreleased\n## Unreleased\n", "v1", &entries)
             .unwrap_err()
             .to_string()
             .contains("ambiguous")
     );
     assert!(
-        update_document("## Unreleased\n\n## v0\n", "v1", &Notes::default())
+        insert_notes("## Unreleased\n\n## v0\n", "v1", &Notes::default())
             .unwrap_err()
             .to_string()
             .contains("no release notes")
@@ -155,4 +155,15 @@ fn tasks_read_a_custom_document_and_report_missing_files() {
     ] {
         assert!(context.call(task, &arguments).is_err(), "{arguments:?}");
     }
+}
+
+#[test]
+#[allow(deprecated)]
+fn the_deprecated_update_renames_only_the_heading_preserving_crlf_and_unicode() {
+    let document = "# Releases\r\n\r\n## Unreleased ##\r\n\r\nこんにちは\r\n\r\n## v0\r\nOld\r\n";
+    assert_eq!(
+        bake_releases::update_document(document, "v1").unwrap(),
+        document.replacen("Unreleased", "v1", 1)
+    );
+    assert!(bake_releases::update_document("## Unreleased\n## Unreleased\n", "v1").is_err());
 }
