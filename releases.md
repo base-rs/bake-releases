@@ -1,8 +1,9 @@
 # Releases
 
-## Unreleased
+## v0.3.10
 
 - Generate each version's section of `releases.md` from Git history, so pull requests no longer edit it. `releases:update` lists the subject of each commit since the previous release tag, newest first and linked to its pull request, under any **Breaking changes** taken from `Breaking:` paragraphs in commit bodies, and keeps the body of an existing `## Unreleased` section. `releases:notes Unreleased` previews the section, `releases:pending` lists its commits, `releases:verify` checks a release candidate's section against its history, and `releases:check` rejects hand edits in pull requests. `insert_notes` writes generated `Notes` into a document, and `update_document` is deprecated.
+- Generate each version's release notes from Git history, so pull requests never edit `releases.md`. ([#35](https://github.com/base-rs/bake-releases/pull/35))
 
 ## v0.3.9
 
