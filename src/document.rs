@@ -210,8 +210,10 @@ fn link<'commit>(commit: &'commit Commit, repository: Option<&str>) -> (&'commit
     }
 }
 
-/// Every body paragraph that begins `Breaking:`, its lines joined with spaces
-/// and the marker removed.
+const MARKER: &str = "Breaking:";
+
+/// Every body paragraph that begins `Breaking:`, in any case, its lines joined
+/// with spaces and the marker removed.
 fn breaking_paragraphs(body: &str) -> Vec<String> {
     let body = body.replace("\r\n", "\n").replace('\r', "\n");
     let mut paragraphs = Vec::new();
@@ -223,8 +225,10 @@ fn breaking_paragraphs(body: &str) -> Vec<String> {
             continue;
         }
         if let Some(first) = lines.first()
-            && let Some(rest) = first.strip_prefix("Breaking:")
+            && let Some(marker) = first.get(..MARKER.len())
+            && marker.eq_ignore_ascii_case(MARKER)
         {
+            let rest = &first[MARKER.len()..];
             let text = std::iter::once(rest.trim())
                 .chain(lines[1..].iter().copied())
                 .filter(|part| !part.is_empty())
@@ -489,10 +493,10 @@ mod tests {
 
     #[test]
     fn extracts_every_breaking_paragraph_with_its_link() {
-        let body = "Intro.\r\n\r\nBreaking: `run` takes a\r\n  `Context`.\r\n\r\nBreaking:\nRename `a`.\n   \nNot Breaking: here.\n\nBreaking:\n\nCo-authored-by: Someone <someone@example.com>";
+        let body = "Intro.\r\n\r\nBreaking: `run` takes a\r\n  `Context`.\r\n\r\nBreaking:\nRename `a`.\n   \nNot Breaking: here.\n\nBreakingé is no marker.\n\nBREAKING: Remove `c`.\n\nBreaking:\n\nCo-authored-by: Someone <someone@example.com>";
         let commits = [
             commit("1111111111", "Break things. (#3)", body),
-            commit("2222222222", "Direct.", "Breaking: Drop `b`."),
+            commit("2222222222", "Direct.", "breaking: Drop `b`."),
         ];
         let generated = Notes::from_commits(&commits, None);
         assert_eq!(
@@ -500,12 +504,13 @@ mod tests {
             [
                 "`run` takes a `Context`. (#3)",
                 "Rename `a`. (#3)",
+                "Remove `c`. (#3)",
                 "Drop `b`.",
             ]
         );
         assert_eq!(
             generated.render("\n\n- Kept.\r\n\r\n"),
-            "**Breaking changes**\n\n- `run` takes a `Context`. (#3)\n- Rename `a`. (#3)\n- Drop `b`.\n\n**Changes**\n\n- Kept.\n- Break things. (#3)\n- Direct.\n"
+            "**Breaking changes**\n\n- `run` takes a `Context`. (#3)\n- Rename `a`. (#3)\n- Remove `c`. (#3)\n- Drop `b`.\n\n**Changes**\n\n- Kept.\n- Break things. (#3)\n- Direct.\n"
         );
         let breaking_only = Notes {
             breaking: vec!["Drop `c`.".to_owned()],

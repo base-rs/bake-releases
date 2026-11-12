@@ -67,23 +67,6 @@ pub(crate) fn file_at(context: &Context, revision: &str, path: &str) -> Result<S
     git_text(context, &["show", &format!("{revision}:./{path}")])
 }
 
-/// Whether `revision` carries a `Release:` trailer.
-pub(crate) fn is_release(context: &Context, revision: &str) -> Result<bool> {
-    let commit = format!("{revision}^{{commit}}");
-    let trailers = git_text(
-        context,
-        &[
-            "show",
-            "--no-patch",
-            "--format=format:%(trailers:key=Release,valueonly)",
-            "--end-of-options",
-            &commit,
-            "--",
-        ],
-    )?;
-    Ok(!trailers.trim().is_empty())
-}
-
 /// Whether `head` changes `path` relative to its merge base with `base`.
 pub(crate) fn changes(context: &Context, base: &str, head: &str, path: &str) -> Result<bool> {
     let (base, head) = (resolve(context, base)?, resolve(context, head)?);
@@ -92,6 +75,42 @@ pub(crate) fn changes(context: &Context, base: &str, head: &str, path: &str) -> 
     let arguments = ["diff", "--quiet", "--no-ext-diff", &range, "--", &path];
     let (code, _) = run(context, "git", &arguments, &[0, 1])?;
     Ok(code == 1)
+}
+
+/// The commits reachable from `head` but not `base`, other than merges, that
+/// change `path`, each with whether it carries a `Release:` trailer. Merges are
+/// skipped so that GitHub's pull request merge commit, or a merge queue's, is
+/// judged by the commits it brings in.
+pub(crate) fn editors(
+    context: &Context,
+    base: &str,
+    head: &str,
+    path: &str,
+) -> Result<Vec<(String, bool)>> {
+    let range = format!("{}..{}", resolve(context, base)?, resolve(context, head)?);
+    let path = format!("./{path}");
+    let output = git_text(
+        context,
+        &[
+            "log",
+            "--no-merges",
+            "--full-history",
+            "--format=format:%H%x1f%(trailers:key=Release,valueonly)%x1e",
+            "--end-of-options",
+            &range,
+            "--",
+            &path,
+        ],
+    )?;
+    Ok(output
+        .split(RECORD)
+        .map(|record| record.trim_start_matches('\n'))
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            let (sha, release) = record.split_once(FIELD).unwrap_or((record, ""));
+            (sha.to_owned(), !release.trim().is_empty())
+        })
+        .collect())
 }
 
 /// The commits on the first-parent history of `until`, newest first, that are

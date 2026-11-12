@@ -27,7 +27,7 @@ This crate only manages the Markdown release document. Cargo publication and Git
 Nobody edits `releases.md` by hand. When a release is prepared, `releases:update vX.Y.Z` writes the version's section from Git history, so pull requests never conflict on the file:
 
 - One line for each commit on the first-parent history since the previous release tag, newest first, holding its subject verbatim. With squash merges the subject is the pull request title, so write titles for users. A trailing `(#N)` becomes a link to the pull request, and a commit without one links to itself. Links are built from `--repository URL`, or else the manifest's `repository`; without either, subjects are kept as they are.
-- A **Breaking changes** list at the top, from every paragraph of a commit body (the pull request description) that begins `Breaking:`, followed by a **Changes** lead-in. Say what breaks and how to migrate.
+- A **Breaking changes** list at the top, from every paragraph of a commit body (the pull request description) that begins `Breaking:`, in any case, followed by a **Changes** lead-in. Say what breaks and how to migrate.
 - Commits with a `Release:` trailer are skipped, and so are commits that touch only `.github/`, `.agents/` or the private `bake/` task package. List more paths, relative to the repository root, in `[workspace.metadata.bake.release] notes-exclude`, or pass `--exclude PATH` or `--scope PATHSPEC`.
 - The previous release is the highest tag reachable from `HEAD` that is the manifest's `tag-prefix` (`v` by default) followed by a semantic version below the new one. Override it with `--since REV`; without one, the whole history counts.
 
@@ -40,7 +40,7 @@ cargo bake releases:verify v0.2.0 --sha "$CANDIDATE"
 cargo bake releases:check "$BASE"
 ```
 
-`releases:verify` regenerates the section from the history of the candidate's first parent, which for a squash or merge candidate is the target branch, and fails unless it matches the committed `## vX.Y.Z` section. This catches hand edits and features merged after the release was prepared. `releases:check BASE` fails when `HEAD` (or `--head REV`) changes `releases.md` since its merge base with `BASE` without a `Release:` trailer; run it in pull request CI.
+`releases:verify` regenerates the section from the history of the candidate's first parent, which for a squash or merge candidate is the target branch, and fails unless it matches the committed `## vX.Y.Z` section. This catches hand edits and features merged after the release was prepared. `releases:check BASE` fails when `HEAD` (or `--head REV`) changes `releases.md` since its merge base with `BASE` and a commit making the change, merges aside, has no `Release:` trailer. Run it in pull request and merge queue CI, where `HEAD` may be GitHub's merge commit.
 
 ## Document format
 

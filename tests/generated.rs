@@ -342,8 +342,12 @@ fn chooses_the_newest_earlier_tag_with_the_configured_prefix() {
 fn uses_the_whole_history_without_a_previous_tag() {
     let fixture = Fixture::empty();
     fixture.commit(&[("releases.md", "# Releases\n")], "Start.");
+    fixture.commit(&[("a.rs", "1\n")], "Grüße aus 東京. (#2)");
     fixture.call("releases:update", &["v1"]).unwrap();
-    assert_eq!(fixture.releases(), "# Releases\n\n## v1\n\n- Start.\n");
+    assert_eq!(
+        fixture.releases(),
+        "# Releases\n\n## v1\n\n- Grüße aus 東京. (#2)\n- Start.\n"
+    );
 }
 
 #[test]
@@ -442,6 +446,11 @@ fn checks_that_only_release_commits_edit_the_document() {
         error.to_string().contains(": releases.md is generated"),
         "{error}"
     );
+    let hand_edit = fixture.git(&["rev-parse", "HEAD"]);
+
+    // A release branch passes, and so does GitHub's merge commit of it into a
+    // base that has moved on, whose own message has no trailer.
+    fixture.git(&["switch", "--quiet", "--create", "release-v0.2.0", &base]);
     let release = fixture.release("v0.2.0");
     assert_eq!(
         fixture
@@ -449,6 +458,27 @@ fn checks_that_only_release_commits_edit_the_document() {
             .unwrap(),
         serde_json::json!({"changed": true, "release": true})
     );
+    fixture.git(&["switch", "--quiet", "--create", "moved", &base]);
+    fixture.commit(&[("src/moved.rs", "// Moved.\n")], "Move on. (#11)");
+    fixture.git(&["merge", "--quiet", "--no-ff", "--no-edit", "release-v0.2.0"]);
+    assert_eq!(
+        fixture.call("releases:check", &[&base]).unwrap(),
+        serde_json::json!({"changed": true, "release": true})
+    );
+
+    // A hand edit brought in by a merge fails, naming the commit.
+    fixture.git(&["merge", "--quiet", "--no-ff", "--no-edit", &hand_edit]);
+    let error = fixture.call("releases:check", &[&base]).unwrap_err();
+    assert!(error.to_string().contains(&hand_edit[..12]), "{error}");
+
+    // So does an edit made only in a merge commit.
+    fixture.git(&["switch", "--quiet", "--create", "evil", &base]);
+    fixture.git(&["merge", "--quiet", "--no-ff", "--no-commit", "moved~2"]);
+    fixture.write("releases.md", &edited);
+    fixture.git(&["commit", "--quiet", "--all", "--no-edit"]);
+    let error = fixture.call("releases:check", &[&base]).unwrap_err();
+    assert!(error.to_string().contains("but a merge does"), "{error}");
+    fixture.git(&["switch", "--quiet", "main"]);
     assert!(
         fixture
             .call("releases:check", &[&base, "--head", "missing"])
