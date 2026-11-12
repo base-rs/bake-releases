@@ -146,8 +146,10 @@ impl Notes {
     /// then a `**Changes**` lead-in, so the two lists stay apart, then the
     /// changes. Each list holds what `kept` has for it, then the generated items.
     ///
-    /// Content of `kept` after a `**Breaking changes**` lead-in paragraph, up to
-    /// a `**Changes**` one, is kept as breaking changes; the rest of it is kept as
+    /// Content of `kept` after a `**Breaking changes**` lead-in, up to a
+    /// `**Changes**` one, is kept as breaking changes, where a lead-in is a
+    /// document-level heading or wholly strong paragraph of either title, in any
+    /// case and with an optional trailing colon; the rest of it is kept as
     /// changes, without the lead-ins, so a kept section and the generated breaking
     /// changes share one list.
     ///
@@ -210,16 +212,41 @@ fn split_kept(kept: &str) -> (String, String) {
     };
     for id in document.children(document.root()) {
         let span = document.node(id).unwrap().span.clone();
-        let lead_in = match kept[span.clone()].trim() {
-            BREAKING_LEAD_IN => true,
-            CHANGES_LEAD_IN => false,
-            _ => continue,
+        let Some(lead_in) = lead_in(&kept[span.clone()]) else {
+            continue;
         };
         take(start..span.start, in_breaking);
         (start, in_breaking) = (span.end, lead_in);
     }
     take(start..kept.len(), in_breaking);
     (breaking.join("\n\n"), changes.join("\n\n"))
+}
+
+/// Whether a document-level block of a kept body is a breaking changes lead-in,
+/// `Some(true)`, a changes one, `Some(false)`, or neither: a heading or a wholly
+/// strong paragraph saying `Breaking changes` or `Changes`, in any case and with
+/// an optional trailing colon, as `**Breaking changes:**` or `### Changes`.
+fn lead_in(block: &str) -> Option<bool> {
+    let block = normalize(block);
+    let block = block.trim().trim_end_matches(':');
+    let title = match block
+        .strip_prefix("**")
+        .and_then(|block| block.strip_suffix("**"))
+    {
+        Some(title) => title,
+        None => {
+            let title = block.trim_start_matches('#');
+            if !(1..=6).contains(&(block.len() - title.len())) {
+                return None;
+            }
+            title.strip_prefix(' ')?.trim_end_matches('#')
+        }
+    };
+    match title.trim().trim_end_matches(':').to_lowercase().as_str() {
+        "breaking changes" => Some(true),
+        "changes" => Some(false),
+        _ => None,
+    }
 }
 
 fn list(items: &[String]) -> String {
@@ -583,6 +610,31 @@ mod tests {
         );
         assert_eq!(notes(&["New."]).render("**Changes**\n"), "- New.\n");
         assert_eq!(Notes::default().render("**Breaking changes**\n"), "");
+        // Headings, case, a colon and `__` spell lead-ins too, but prose does not.
+        for spelling in [
+            "### Breaking changes\n\n- Old break.\n\n#### Changes ####\n\n- Old.\n",
+            "**Breaking Changes:**\n\n- Old break.\n\n__Changes__:\n\n- Old.\n",
+        ] {
+            assert_eq!(
+                generated.render(spelling),
+                "**Breaking changes**\n\n- Old break.\n- New break. (#9)\n\n**Changes**\n\n- Old.\n- New. (#9)\n",
+                "{spelling:?}"
+            );
+        }
+        for prose in [
+            "**Breaking changes** follow.\n",
+            "**Breaking** changes\n",
+            "Changes\n",
+            "####### Changes\n",
+            "#Changes\n",
+            "**Old** and **Changes**\n",
+        ] {
+            assert_eq!(
+                Notes::default().render(prose),
+                normalize(prose),
+                "{prose:?}"
+            );
+        }
         // Lead-ins inside lists, quotes and code are content, not boundaries.
         let nested = "- **Changes**\n\n> **Changes**\n\n```\n**Changes**\n```\n";
         assert_eq!(
