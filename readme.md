@@ -1,6 +1,6 @@
 # `bake-releases`
 
-Reusable releases.md tasks for Bake, inspired by Samuel Williams's [Ruby bake-releases](https://github.com/ioquatix/bake-releases) (MIT).
+Reusable releases.md tasks for Bake, which generate each version's release notes from Git history, inspired by Samuel Williams's [Ruby bake-releases](https://github.com/ioquatix/bake-releases) (MIT).
 
 ## Usage
 
@@ -22,15 +22,35 @@ cargo bake releases:notes v0.1.0 --path releases.md
 
 This crate only manages the Markdown release document. Cargo publication and GitHub release creation are provided by [Bake Cargo](https://github.com/base-rs/bake-cargo).
 
+## Generated release notes
+
+Nobody edits `releases.md` by hand. When a release is prepared, `releases:update vX.Y.Z` writes the version's section from Git history, so pull requests never conflict on the file:
+
+- One line for each commit on the first-parent history since the previous release tag, newest first, holding its subject verbatim. With squash merges the subject is the pull request title, so write titles for users. A trailing `(#N)` becomes a link to the pull request, and a commit without one links to itself. Links are built from `--repository URL`, or else the manifest's `repository`; without either, subjects are kept as they are.
+- A **Breaking changes** list at the top, from every paragraph of a commit body (the pull request description) that begins `Breaking:`, in any case, followed by a **Changes** lead-in. Say what breaks and how to migrate.
+- Commits with a `Release:` trailer are skipped, and so are commits that touch only `.github/`, `.agents/` or the private `bake/` task package. List more paths, relative to the repository root, in `[workspace.metadata.bake.release] notes-exclude`, or pass `--exclude PATH` or `--scope PATHSPEC`.
+- The previous release is the highest tag reachable from `HEAD` that is the manifest's `tag-prefix` (`v` by default) followed by a semantic version below the new one. Override it with `--since REV`; without one, the whole history counts.
+
+The same history always gives byte-identical notes, already in the form `markdown:normalize` writes. An existing `## Unreleased` section is replaced, and its body is kept between the breaking changes and the generated lines, so notes written before the switch are not lost. `update` fails when there are no commits to describe.
+
+```sh
+cargo bake releases:notes Unreleased     # Preview the next section without writing it.
+cargo bake releases:pending              # List the commits it describes; empty means nothing to release.
+cargo bake releases:verify v0.2.0 --sha "$CANDIDATE"
+cargo bake releases:check "$BASE"
+```
+
+`releases:verify` regenerates the section from the history of the candidate's first parent, which for a squash or merge candidate is the target branch, and fails unless it matches the committed `## vX.Y.Z` section. This catches hand edits and features merged after the release was prepared. `releases:check BASE` fails when `HEAD` (or `--head REV`) changes `releases.md` since its merge base with `BASE` and a commit making the change, merges aside, has no `Release:` trailer. Run it in pull request and merge queue CI, where `HEAD` may be GitHub's merge commit.
+
 ## Document format
 
-Use unindented ATX headings such as `## Unreleased` and `## v0.1.0`. The version argument matches the complete heading title exactly (including any v prefix). Optional closing heading markers are supported. Fenced code blocks can contain example headings. Setext headings, HTML blocks, and headings inside lists or block quotes are outside this release-document format.
+Use unindented ATX headings such as `## v0.1.0`. The version argument matches the complete heading title exactly (including any v prefix). Optional closing heading markers are supported. Fenced code blocks can contain example headings. Setext headings, HTML blocks, and headings inside lists or block quotes are outside this release-document format.
 
 notes returns the body beneath the selected heading until the next heading of the same or a higher level. Nested sections, whitespace, line endings, and other Markdown bytes are preserved. Missing and duplicate headings are errors.
 
-update renames exactly one Unreleased heading. It rejects an existing release heading, missing/duplicate Unreleased sections, and invalid multiline titles. The rest of the file is preserved. A temporary file in the same directory is written and synchronized before replacing the original, preserving file permissions. Existing symlinks are followed. As with other file editors, concurrent external edits are not merged and replacing a file changes its identity for hard links.
+update inserts the new section before the first `##` heading, or at the end. It rejects an existing release heading, duplicate Unreleased sections, and invalid multiline titles. The rest of the file is preserved, and the new section uses the file's line endings. A temporary file in the same directory is written and synchronized before replacing the original, preserving file permissions. Existing symlinks are followed. As with other file editors, concurrent external edits are not merged and replacing a file changes its identity for hard links.
 
-These tasks do not modify Cargo versions, create a new Unreleased section, commit, tag, or publish releases. The pure `extract_notes` and `update_document` functions are also available for direct library use.
+These tasks do not modify Cargo versions, commit, tag, or publish releases. The pure `extract_notes`, `render_section` and `insert_notes` functions, with `Notes` and `Commit`, are also available for direct library use. `update_document`, which only renames `## Unreleased`, is deprecated.
 
 ## Releasing
 
