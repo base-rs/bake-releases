@@ -1,8 +1,15 @@
 // Released under the MIT License.
 // Copyright, 2026, by Samuel Williams.
 
-use bake_releases::{extract_notes, update_document};
+use bake_releases::{Notes, extract_notes, update_document};
 use std::fs;
+
+fn notes(entries: &[&str]) -> Notes {
+    Notes {
+        breaking: Vec::new(),
+        entries: entries.iter().map(|entry| (*entry).to_owned()).collect(),
+    }
+}
 
 #[test]
 fn preserves_nested_sections_and_markdown() {
@@ -22,7 +29,10 @@ fn ignores_headings_in_fenced_code() {
         let body = format!("\n{fence}\n## Unreleased\n## v0.1.0\n{closing}\n\nText\n");
         let document = format!("## v1.0.0\n{body}## v0.1.0\nOlder\n");
         assert_eq!(extract_notes(&document, "v1.0.0").unwrap(), body);
-        assert!(update_document(&document, "v2.0.0").is_err());
+        assert_eq!(
+            update_document(&document, "v2.0.0", &notes(&["New."])).unwrap(),
+            format!("## v2.0.0\n\n- New.\n\n{document}")
+        );
     }
 }
 
@@ -46,89 +56,103 @@ fn headings_are_exact_unique_and_unindented() {
 }
 
 #[test]
-fn updates_reject_formatted_unreleased_titles() {
-    assert!(update_document("## **Unreleased**\n", "v1").is_err());
+fn inserts_the_section_before_the_first_release_heading() {
+    let notes = notes(&["Two.", "One."]);
+    for (document, expected) in [
+        (
+            "# Releases\n\n## v0\n\nOld.\n",
+            "# Releases\n\n## v1\n\n- Two.\n- One.\n\n## v0\n\nOld.\n",
+        ),
+        (
+            "# Releases\n## v0\n",
+            "# Releases\n\n## v1\n\n- Two.\n- One.\n\n## v0\n",
+        ),
+        ("# Releases\n", "# Releases\n\n## v1\n\n- Two.\n- One.\n"),
+        ("# Releases\n\n", "# Releases\n\n## v1\n\n- Two.\n- One.\n"),
+        ("# Releases", "# Releases\n\n## v1\n\n- Two.\n- One.\n"),
+        ("", "## v1\n\n- Two.\n- One.\n"),
+        (
+            "# Releases\n\n### Notes\n\n## v0\n",
+            "# Releases\n\n### Notes\n\n## v1\n\n- Two.\n- One.\n\n## v0\n",
+        ),
+    ] {
+        assert_eq!(update_document(document, "v1", &notes).unwrap(), expected);
+    }
 }
 
 #[test]
-fn updates_only_the_heading_preserving_crlf_and_unicode() {
-    let document = "# Releases\r\n\r\n## Unreleased ##\r\n\r\nこんにちは\r\n\r\n## v0\r\nOld\r\n";
+fn keeps_the_unreleased_body_between_breaking_changes_and_entries() {
+    let notes = Notes {
+        breaking: vec!["Drop `a`.".to_owned()],
+        entries: vec!["Generated.".to_owned()],
+    };
+    let document = "# Releases\n\n## Unreleased\n\n- Hand-written.\n\n### Detail\n\nMore.\n\n\n## v0\n\nOld.\n";
     assert_eq!(
-        update_document(document, "v1").unwrap(),
-        document.replacen("Unreleased", "v1", 1)
+        update_document(document, "v1", &notes).unwrap(),
+        "# Releases\n\n## v1\n\n**Breaking changes**\n\n- Drop `a`.\n\n**Changes**\n\n- Hand-written.\n\n### Detail\n\nMore.\n\n- Generated.\n\n## v0\n\nOld.\n"
     );
     assert_eq!(
-        extract_notes(document, "Unreleased").unwrap(),
-        "\r\nこんにちは\r\n\r\n"
+        update_document("## Unreleased\n\n- Only.\n", "v1", &Notes::default()).unwrap(),
+        "## v1\n\n- Only.\n"
+    );
+}
+
+#[test]
+fn updates_preserve_crlf_and_unicode() {
+    let document = "# Releases\r\n\r\n## Unreleased ##\r\n\r\nこんにちは\r\n\r\n## v0\r\nOld\r\n";
+    assert_eq!(
+        update_document(document, "v1", &notes(&["さようなら"])).unwrap(),
+        "# Releases\r\n\r\n## v1\r\n\r\nこんにちは\r\n\r\n- さようなら\r\n\r\n## v0\r\nOld\r\n"
     );
 }
 
 #[test]
 fn invalid_updates_leave_no_result() {
+    let entries = notes(&["New."]);
     for version in ["", "Unreleased", " v1", "v1 ", "v1\n## Bad", "v1\0", "v1#"] {
         assert!(
-            update_document("## Unreleased\n", version).is_err(),
+            update_document("## Unreleased\n", version, &entries).is_err(),
             "{version:?}"
         );
     }
-    assert!(update_document("## Unreleased\n## v1\n", "v1").is_err());
-    assert!(update_document("## Unreleased\n## Unreleased\n", "v1").is_err());
-    assert!(update_document("## v0\n", "v1").is_err());
+    assert!(update_document("## Unreleased\n## v1\n", "v1", &entries).is_err());
+    assert!(
+        update_document("## Unreleased\n## Unreleased\n", "v1", &entries)
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous")
+    );
+    assert!(
+        update_document("## Unreleased\n\n## v0\n", "v1", &Notes::default())
+            .unwrap_err()
+            .to_string()
+            .contains("no release notes")
+    );
 }
 
 #[test]
-fn tasks_read_and_update_a_custom_document_under_project_root() {
+fn tasks_read_a_custom_document_and_report_missing_files() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("changes.md");
-    fs::write(&path, "# Releases\n\n## Unreleased\n\nNew feature.\n").unwrap();
+    fs::write(
+        directory.path().join("changes.md"),
+        "# Releases\n\n## v1\n\nOld feature.\n",
+    )
+    .unwrap();
+    fs::write(directory.path().join("invalid.md"), [0xff]).unwrap();
     let registry = bake::Registry::discover().unwrap();
     let mut context = registry.context(directory.path());
     assert_eq!(
         context
-            .call("releases:notes", &["Unreleased", "--path", "changes.md"])
-            .unwrap(),
-        "\nNew feature.\n"
-    );
-    context
-        .call("releases:update", &["v1", "--path", "changes.md"])
-        .unwrap();
-    assert!(fs::read_to_string(&path).unwrap().contains("## v1\n"));
-    let updated = fs::read(&path).unwrap();
-    assert!(
-        context
-            .call("releases:update", &["v2", "--path", "changes.md"])
-            .is_err()
-    );
-    assert_eq!(fs::read(&path).unwrap(), updated);
-}
-
-#[test]
-fn tasks_report_missing_files_and_release_headings() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("changes.md");
-    fs::write(&path, "# Releases\nNo release headings yet.\n").unwrap();
-    fs::write(directory.path().join("invalid.md"), [0xff]).unwrap();
-    let registry = bake::Registry::discover().unwrap();
-    let mut context = registry.context(directory.path());
-
-    assert!(
-        context
-            .call("releases:notes", &["v1", "--path", "missing.md"])
-            .is_err()
-    );
-    assert!(
-        context
-            .call("releases:update", &["v1", "--path", "missing.md"])
-            .is_err()
-    );
-    assert!(
-        context
-            .call("releases:update", &["v1", "--path", "invalid.md"])
-            .is_err()
-    );
-    assert!(
-        context
             .call("releases:notes", &["v1", "--path", "changes.md"])
-            .is_err()
+            .unwrap(),
+        "\nOld feature.\n"
     );
+    for (task, arguments) in [
+        ("releases:notes", ["v1", "--path", "missing.md"]),
+        ("releases:notes", ["v2", "--path", "changes.md"]),
+        ("releases:update", ["v2", "--path", "missing.md"]),
+        ("releases:update", ["v2", "--path", "invalid.md"]),
+    ] {
+        assert!(context.call(task, &arguments).is_err(), "{arguments:?}");
+    }
 }

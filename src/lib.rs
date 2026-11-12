@@ -3,12 +3,19 @@
 
 //! Reusable release-document tasks, inspired by Samuel Williams's Ruby
 //! `bake-releases`: <https://github.com/ioquatix/bake-releases> (MIT).
-//! This implementation preserves Markdown bytes rather than re-rendering them.
+//! This implementation preserves Markdown bytes rather than re-rendering them,
+//! and generates each version's notes from the squash-merged commits since the
+//! previous release tag, so nobody edits `releases.md` by hand.
 mod document;
+mod history;
+mod project;
 
-pub use document::{extract_notes, update_document};
+pub use document::{Commit, Notes, extract_notes, render_section, update_document};
 
-use bake::{Context, Error, Result};
+use bake::{Context, Error, Result, Value};
+use history::Version;
+use project::Project;
+use std::collections::BTreeMap;
 use std::fs;
 use std::fs::{File, Permissions};
 use std::io::{self, Write};
@@ -73,8 +80,73 @@ fn update_file_with(
     Ok(())
 }
 
-/// Extract the Markdown body beneath an exact release heading.
+/// The options shared by the tasks that generate notes from Git history.
+struct Options {
+    since: Option<String>,
+    scope: Vec<String>,
+    exclude: Vec<String>,
+    repository: Option<String>,
+}
+
+/// The commits in a release range and the notes generated from them.
+struct Generated {
+    since: Option<String>,
+    commits: Vec<Commit>,
+    notes: Notes,
+}
+
+/// Generate the notes for the first-parent history of `until` since the previous
+/// release tag, which must be below `version` when the version is semantic.
+fn generate(
+    context: &Context,
+    version: Option<&str>,
+    until: &str,
+    options: Options,
+) -> Result<Generated> {
+    let project = Project::read(context.root())?;
+    let since = match options.since {
+        Some(since) => Some(since),
+        None => {
+            let below = version
+                .and_then(|version| version.strip_prefix(&project.tag_prefix))
+                .and_then(Version::parse);
+            history::previous_tag(context, &project.tag_prefix, until, below.as_ref())?
+        }
+    };
+    let mut excluded = project.notes_exclude;
+    excluded.extend(options.exclude);
+    let pathspec = history::pathspec(&options.scope, &excluded);
+    let commits = history::commits(context, since.as_deref(), until, &pathspec)?;
+    let repository = options.repository.or(project.repository);
+    let notes = Notes::from_commits(&commits, repository.as_deref());
+    Ok(Generated {
+        since,
+        commits,
+        notes,
+    })
+}
+
+impl Generated {
+    fn require_commits(self) -> Result<Self> {
+        if self.commits.is_empty() {
+            let since = self.since.as_deref().unwrap_or("the start of history");
+            return Err(Error::new(format!(
+                "no commits in the release scope since {since}; there is nothing to release"
+            )));
+        }
+        Ok(self)
+    }
+}
+
+fn read_document(path: &Path) -> Result<String> {
+    fs::read_to_string(path).map_err(|error| Error::new(format!("{}: {error}", path.display())))
+}
+
+/// Extract the Markdown body beneath an exact release heading. `Unreleased`
+/// previews the next version's notes, generated from Git history, without
+/// writing anything.
 #[bake::task]
+#[allow(clippy::too_many_arguments)]
 pub fn notes(
     context: &mut Context,
     version: String,
@@ -83,25 +155,178 @@ pub fn notes(
         help = "Release document relative to the project root."
     )]
     path: PathBuf,
+    #[bake(help = "Revision of the previous release; by default, the newest earlier release tag.")]
+    since: Option<String>,
+    #[bake(help = "Git pathspec of the commits that count; by default, the whole repository.")]
+    scope: Vec<String>,
+    #[bake(help = "Path, relative to the repository root, whose commits do not count.")]
+    exclude: Vec<String>,
+    #[bake(help = "Repository URL for links; by default, the manifest's `repository`.")]
+    repository: Option<String>,
 ) -> Result<String> {
-    let path = context.root().join(path);
-    let document = fs::read_to_string(&path)
-        .map_err(|error| Error::new(format!("{}: {error}", path.display())))?;
+    let document = read_document(&context.root().join(path))?;
+    if version == "Unreleased" {
+        let options = Options {
+            since,
+            scope,
+            exclude,
+            repository,
+        };
+        let generated = generate(context, None, "HEAD", options)?;
+        let kept = extract_notes(&document, "Unreleased").unwrap_or_default();
+        return Ok(generated.notes.render(kept));
+    }
     Ok(extract_notes(&document, &version)?.to_owned())
 }
 
-/// Rename Unreleased to a release version, preserving the rest of the document.
+/// Write the `## VERSION` section, generated from the commits since the previous
+/// release tag, keeping the body of any `## Unreleased` section.
 #[bake::task]
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     context: &mut Context,
     version: String,
     #[bake(default = "releases.md")] path: PathBuf,
+    #[bake(help = "Revision of the previous release; by default, the newest earlier release tag.")]
+    since: Option<String>,
+    #[bake(help = "Git pathspec of the commits that count; by default, the whole repository.")]
+    scope: Vec<String>,
+    #[bake(help = "Path, relative to the repository root, whose commits do not count.")]
+    exclude: Vec<String>,
+    #[bake(help = "Repository URL for links; by default, the manifest's `repository`.")]
+    repository: Option<String>,
 ) -> Result<()> {
     let path = context.root().join(path).canonicalize()?;
     let document = fs::read_to_string(&path)?;
-    let updated = update_document(&document, &version)?;
+    let options = Options {
+        since,
+        scope,
+        exclude,
+        repository,
+    };
+    let generated = generate(context, Some(&version), "HEAD", options)?.require_commits()?;
+    let updated = update_document(&document, &version, &generated.notes)?;
     let directory = path.parent().unwrap_or(path.as_path());
     update_file_with(directory, &path, &updated, &mut SystemUpdateIo)
+}
+
+/// List the commits that the next release's notes would describe, newest first.
+/// An empty list means there is nothing to release.
+#[bake::task]
+pub fn pending(
+    context: &mut Context,
+    #[bake(help = "Revision of the previous release; by default, the newest release tag.")]
+    since: Option<String>,
+    #[bake(help = "Git pathspec of the commits that count; by default, the whole repository.")]
+    scope: Vec<String>,
+    #[bake(help = "Path, relative to the repository root, whose commits do not count.")]
+    exclude: Vec<String>,
+) -> Result<Value> {
+    let options = Options {
+        since,
+        scope,
+        exclude,
+        repository: None,
+    };
+    let generated = generate(context, None, "HEAD", options)?;
+    let commits: Vec<BTreeMap<&str, &str>> = generated
+        .commits
+        .iter()
+        .map(|commit| BTreeMap::from([("sha", commit.sha.as_str()), ("subject", &commit.subject)]))
+        .collect();
+    bake::value(commits)
+}
+
+fn first_difference(expected: &str, committed: &str) -> String {
+    let (mut expected, mut committed) = (expected.lines(), committed.lines());
+    let mut line = 1;
+    loop {
+        match (expected.next(), committed.next()) {
+            (left, right) if left == right => line += 1,
+            (left, right) => {
+                return format!(
+                    "line {line} should be {:?} but is {:?}",
+                    left.unwrap_or_default(),
+                    right.unwrap_or_default()
+                );
+            }
+        }
+    }
+}
+
+/// Check that the `## VERSION` section committed in `sha` is the one generated
+/// from the history of its first parent, which for a merge candidate is the
+/// target branch.
+#[bake::task]
+#[allow(clippy::too_many_arguments)]
+pub fn verify(
+    context: &mut Context,
+    version: String,
+    #[bake(default = "HEAD", help = "The release commit or merge candidate.")] sha: String,
+    #[bake(default = "releases.md")] path: PathBuf,
+    #[bake(help = "Revision of the previous release; by default, the newest earlier release tag.")]
+    since: Option<String>,
+    #[bake(help = "Git pathspec of the commits that count; by default, the whole repository.")]
+    scope: Vec<String>,
+    #[bake(help = "Path, relative to the repository root, whose commits do not count.")]
+    exclude: Vec<String>,
+    #[bake(help = "Repository URL for links; by default, the manifest's `repository`.")]
+    repository: Option<String>,
+) -> Result<Value> {
+    let path = path.to_string_lossy();
+    let sha = history::resolve(context, &sha)?;
+    let parent = history::resolve(context, &format!("{sha}^1"))?;
+    let options = Options {
+        since,
+        scope,
+        exclude,
+        repository,
+    };
+    let generated = generate(context, Some(&version), &parent, options)?.require_commits()?;
+    let regenerated = update_document(
+        &history::file_at(context, &parent, &path)?,
+        &version,
+        &generated.notes,
+    )?;
+    let committed = history::file_at(context, &sha, &path)?;
+    let expected = extract_notes(&regenerated, &version)
+        .unwrap_or_default()
+        .trim();
+    let committed = extract_notes(&committed, &version)?.trim();
+    if !expected.lines().eq(committed.lines()) {
+        return Err(Error::new(format!(
+            "the {version} section of {path} differs from the notes generated from the history of {parent}: {}; prepare the release again from the current branch",
+            first_difference(expected, committed)
+        )));
+    }
+    bake::value(BTreeMap::from([
+        ("version", Value::from(version)),
+        ("commits", Value::from(generated.commits.len())),
+    ]))
+}
+
+/// Fail when `head` edits the release document without being a release
+/// commit, since release notes are generated from Git history.
+#[bake::task]
+pub fn check(
+    context: &mut Context,
+    #[bake(help = "The pull request's base revision; empty or all zeros checks nothing.")]
+    base: String,
+    #[bake(default = "HEAD")] head: String,
+    #[bake(default = "releases.md")] path: PathBuf,
+) -> Result<Value> {
+    if base.is_empty() || base.bytes().all(|byte| byte == b'0') {
+        return bake::value(BTreeMap::from([("changed", false), ("release", false)]));
+    }
+    let path = path.to_string_lossy();
+    let release = history::is_release(context, &head)?;
+    let changed = history::changes(context, &base, &head, &path)?;
+    if changed && !release {
+        return Err(Error::new(format!(
+            "{path} is generated from Git history when a release is prepared, so pull requests do not edit it: revert the change, write the release note as the pull request title, and describe any breaking change in a `Breaking:` paragraph of the description"
+        )));
+    }
+    bake::value(BTreeMap::from([("changed", changed), ("release", release)]))
 }
 
 #[cfg(test)]

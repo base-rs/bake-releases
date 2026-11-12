@@ -1,6 +1,16 @@
 # Proposal: Release Notes Generated from Git History
 
-Status: **proposal for discussion**, November 2026. Nothing here is implemented. If it is agreed, the requirements move into this crate's readme and the Base skills, which then take precedence over this document.
+Status: **accepted**, November 2026, and implemented in this crate; the readme and `context/release-notes.md` describe the behavior and take precedence over this document. The bake-cargo, base-project and skill changes below are follow-ups in those repositories.
+
+## Implementation notes
+
+These details differ from, or settle, the proposal below:
+
+- `releases:update VERSION` needs no new options: the previous tag, scope and repository URL default to what the hook would pass, from the manifest's `tag-prefix`, `notes-exclude` and `repository`, so `after_version_bump` works unchanged. `--since`, `--scope`, `--exclude` and `--repository` override them.
+- Detection is `releases:verify VERSION --sha CANDIDATE`, which bake-cargo's `cargo:release:detect` calls. It regenerates from the candidate's first parent and compares normalized Markdown, since the hook runs `markdown:normalize` after writing.
+- Generated sections are already normalized, so the hook leaves them unchanged. Subjects stay verbatim apart from the escapes the normalizer adds, such as `\*`.
+- A **Changes** lead-in follows the breaking changes, because two lists separated only by a blank line are one list in Markdown. Kept `## Unreleased` entries continue the generated list.
+- `update_document(document, version, notes)` takes `Notes`, built by `Notes::from_commits(commits, repository)`; `render_section(commits, repository)` is the pure renderer.
 
 ## The problem
 
@@ -24,6 +34,8 @@ Nobody edits `releases.md` by hand any more. At release time, bake writes the ne
 **Breaking changes**
 
 - `Server::builder()` registers no environment but the grid; register the ones you offer with `.environment(...)`. ([#197](https://github.com/base-rs/tomori/pull/197))
+
+**Changes**
 
 - Make the campsite's marshmallows twice as big. ([#398](https://github.com/base-rs/tomori/pull/398))
 - Add the farmyard environment, an evening yard with a chicken coop, in a common and a client crate that Tomori's own programs register. ([#197](https://github.com/base-rs/tomori/pull/197))
