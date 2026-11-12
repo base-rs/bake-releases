@@ -202,6 +202,81 @@ fn keeps_an_existing_unreleased_section_at_switch_over() {
 }
 
 #[test]
+fn writes_one_breaking_changes_list_with_kept_breaking_changes() {
+    let kept_breaking = "- Kept break. (#1)\n  - Detail.\n";
+    let generated_breaking = format!("- `parse` returns a `Result`. ([#4]({REPOSITORY}/pull/4))\n");
+    let cases = [
+        // Kept and generated breaking changes, kept first, in one list.
+        (true, true),
+        // Kept breaking changes only.
+        (true, false),
+        // Generated breaking changes only.
+        (false, true),
+        // Neither: the kept lead-ins are dropped with nothing under them.
+        (false, false),
+    ];
+    for (kept, generated) in cases {
+        let unreleased = if kept {
+            format!("**Breaking changes**\n\n{kept_breaking}\n**Changes**\n")
+        } else {
+            "**Breaking changes**\n\n**Changes**\n".to_owned()
+        };
+        let releases =
+            format!("# Releases\n\n## Unreleased\n\n{unreleased}\n## v0.1.0\n\n- First.\n");
+        let fixture = Fixture::new(&releases);
+        let base = fixture.git(&["rev-parse", "HEAD"]);
+        // Starting after the breaking commit leaves it out.
+        let since = if generated {
+            "v0.1.0".to_owned()
+        } else {
+            fixture.sha("Change the parser's result.")
+        };
+        let typo = fixture.sha("Fix a typo.");
+        let mut changes = format!(
+            "- Share the task package. ([#6]({REPOSITORY}/pull/6))\n- Fix a typo. ([{}]({REPOSITORY}/commit/{typo}))\n",
+            &typo[..7]
+        );
+        if generated {
+            changes.push_str(&format!("- Change the parser's result. ([#4]({REPOSITORY}/pull/4))\n- Add the parser. ([#2]({REPOSITORY}/pull/2))\n"));
+        }
+        let breaking = [
+            kept.then_some(kept_breaking),
+            generated.then_some(&generated_breaking),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<String>();
+        let expected = if breaking.is_empty() {
+            changes
+        } else {
+            format!("**Breaking changes**\n\n{breaking}\n**Changes**\n\n{changes}")
+        };
+        let case = format!("kept {kept}, generated {generated}");
+        let preview = fixture.call("releases:notes", &["Unreleased", "--since", &since]);
+        assert_eq!(preview.unwrap(), expected, "{case}");
+
+        fixture.git(&["switch", "--quiet", "--create", "release-v0.2.0"]);
+        fixture
+            .call("releases:update", &["v0.2.0", "--since", &since])
+            .unwrap();
+        fixture.commit(&[], "Bump minor version.\n\nRelease: v0.2.0");
+        assert_eq!(
+            fixture.releases(),
+            format!("# Releases\n\n## v0.2.0\n\n{expected}\n## v0.1.0\n\n- First.\n"),
+            "{case}"
+        );
+        let verified = fixture.call("releases:verify", &["v0.2.0", "--since", &since]);
+        assert!(verified.is_ok(), "{case}: {verified:?}");
+        let checked = fixture.call("releases:check", &[&base]).unwrap();
+        assert_eq!(
+            checked,
+            serde_json::json!({"changed": true, "release": true}),
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn the_same_history_always_gives_byte_identical_notes() {
     let first = Fixture::new(RELEASES);
     let second = Fixture::new(RELEASES);

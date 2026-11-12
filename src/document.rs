@@ -141,29 +141,37 @@ impl Notes {
         notes
     }
 
-    /// Render the section body: the breaking changes, then `kept` (the body of
-    /// an existing `## Unreleased` section), then the entries. A `**Changes**`
-    /// lead-in follows the breaking changes, so the two lists stay apart.
+    /// Render the section body from `kept`, the body of an existing
+    /// `## Unreleased` section, and these notes: one **Breaking changes** list,
+    /// then a `**Changes**` lead-in, so the two lists stay apart, then the
+    /// changes. Each list holds what `kept` has for it, then the generated items.
+    ///
+    /// Content of `kept` after a `**Breaking changes**` lead-in paragraph, up to
+    /// a `**Changes**` one, is kept as breaking changes; the rest of it is kept as
+    /// changes, without the lead-ins, so a kept section and the generated breaking
+    /// changes share one list.
     ///
     /// The result is normalized as the `markdown:normalize` task normalizes
     /// documents, so normalizing a release document leaves it unchanged. Lines
     /// end with `\n`, and an empty result means there is nothing to write.
     pub fn render(&self, kept: &str) -> String {
         let kept = kept.replace("\r\n", "\n").replace('\r', "\n");
-        let mut changes = Vec::new();
-        if !kept.trim().is_empty() {
-            changes.push(kept.trim().to_owned());
-        }
-        if !self.entries.is_empty() {
-            changes.push(list(&self.entries));
-        }
+        let (kept_breaking, kept_changes) = split_kept(&kept);
         // A single line break continues a kept list rather than starting a loose one.
-        let changes = changes.join("\n");
+        let join = |kept: &str, items: &[String]| {
+            [kept.to_owned(), list(items)]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let breaking = join(&kept_breaking, &self.breaking);
+        let changes = join(&kept_changes, &self.entries);
         let mut blocks = Vec::new();
-        if !self.breaking.is_empty() {
-            blocks.push(format!("**Breaking changes**\n\n{}", list(&self.breaking)));
+        if !breaking.is_empty() {
+            blocks.push(format!("{BREAKING_LEAD_IN}\n\n{breaking}"));
             if !changes.is_empty() {
-                blocks.push("**Changes**".to_owned());
+                blocks.push(CHANGES_LEAD_IN.to_owned());
             }
         }
         if !changes.is_empty() {
@@ -177,6 +185,41 @@ impl Notes {
 /// cannot be serialized as it is.
 pub(crate) fn normalize(markdown: &str) -> String {
     base_markdown::normalize_markdown(markdown).unwrap_or(markdown.to_owned())
+}
+
+const BREAKING_LEAD_IN: &str = "**Breaking changes**";
+const CHANGES_LEAD_IN: &str = "**Changes**";
+
+/// Split a kept `## Unreleased` body into its breaking changes and its other
+/// changes, each trimmed, at its document-level lead-in paragraphs.
+fn split_kept(kept: &str) -> (String, String) {
+    let document = Document::parse(kept, &ParseOptions::default())
+        .expect("the built-in Markdown parser produces a valid document");
+    let (mut breaking, mut changes) = (Vec::new(), Vec::new());
+    let (mut start, mut in_breaking) = (0, false);
+    let mut take = |range: Range<usize>, in_breaking: bool| {
+        let part = kept[range].trim();
+        if !part.is_empty() {
+            let parts = if in_breaking {
+                &mut breaking
+            } else {
+                &mut changes
+            };
+            parts.push(part);
+        }
+    };
+    for id in document.children(document.root()) {
+        let span = document.node(id).unwrap().span.clone();
+        let lead_in = match kept[span.clone()].trim() {
+            BREAKING_LEAD_IN => true,
+            CHANGES_LEAD_IN => false,
+            _ => continue,
+        };
+        take(start..span.start, in_breaking);
+        (start, in_breaking) = (span.end, lead_in);
+    }
+    take(start..kept.len(), in_breaking);
+    (breaking.join("\n\n"), changes.join("\n\n"))
 }
 
 fn list(items: &[String]) -> String {
@@ -300,9 +343,9 @@ pub fn update_document(document: &str, version: &str) -> Result<String> {
 /// Insert a `## {version}` section holding `notes` before the first `##`
 /// heading, or at the end, preserving every other byte of the document.
 ///
-/// An existing `## Unreleased` section is replaced: its body is kept between
-/// the breaking changes and the entries, so hand-written notes from before
-/// generated notes are not lost. Existing version headings, duplicate
+/// An existing `## Unreleased` section is replaced: its body is kept, as
+/// [`Notes::render`] describes, so hand-written notes from before generated
+/// notes are not lost. Existing version headings, duplicate
 /// `Unreleased` sections, empty notes and multiline versions are rejected.
 pub fn insert_notes(document: &str, version: &str, notes: &Notes) -> Result<String> {
     let headings = headings(document);
@@ -519,6 +562,32 @@ mod tests {
         assert_eq!(
             breaking_only.render(""),
             "**Breaking changes**\n\n- Drop `c`.\n"
+        );
+    }
+
+    #[test]
+    fn merges_kept_and_generated_breaking_changes_into_one_list() {
+        let generated = Notes {
+            breaking: vec!["New break. (#9)".to_owned()],
+            entries: vec!["New. (#9)".to_owned()],
+        };
+        let kept = "\r\n**Breaking changes**\r\n\r\n- Old break. (#1)\r\n  - Detail.\r\n\r\n**Changes**\r\n\r\n- Old. (#1)\r\n";
+        let merged = "**Breaking changes**\n\n- Old break. (#1)\n  - Detail.\n- New break. (#9)\n\n**Changes**\n\n- Old. (#1)\n- New. (#9)\n";
+        assert_eq!(generated.render(kept), merged);
+        // Rendering its own output again adds nothing.
+        assert_eq!(Notes::default().render(merged), merged);
+        // Kept text before a lead-in is a change, and a lone lead-in is dropped.
+        assert_eq!(
+            generated.render("Intro.\n\n**Changes**\n\n- Old.\n"),
+            "**Breaking changes**\n\n- New break. (#9)\n\n**Changes**\n\nIntro.\n\n- Old.\n- New. (#9)\n"
+        );
+        assert_eq!(notes(&["New."]).render("**Changes**\n"), "- New.\n");
+        assert_eq!(Notes::default().render("**Breaking changes**\n"), "");
+        // Lead-ins inside lists, quotes and code are content, not boundaries.
+        let nested = "- **Changes**\n\n> **Changes**\n\n```\n**Changes**\n```\n";
+        assert_eq!(
+            Notes::default().render(&format!("**Breaking changes**\n\n{nested}")),
+            format!("**Breaking changes**\n\n{nested}")
         );
     }
 

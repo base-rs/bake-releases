@@ -31,7 +31,7 @@ Nobody edits `releases.md` by hand. When a release is prepared, `releases:update
 - Commits with a `Release:` trailer are skipped, and so are commits that touch only `.github/`, `.agents/` or the private `bake/` task package. List more paths, relative to the repository root, in `[workspace.metadata.bake.release] notes-exclude`, or pass `--exclude PATH` or `--scope PATHSPEC`.
 - The previous release is the highest tag reachable from `HEAD` that is the manifest's `tag-prefix` (`v` by default) followed by a semantic version below the new one. Override it with `--since REV`; without one, the whole history counts.
 
-The same history always gives byte-identical notes, already in the form `markdown:normalize` writes. An existing `## Unreleased` section is replaced, and its body is kept between the breaking changes and the generated lines, so notes written before the switch are not lost. `update` fails when there are no commits to describe.
+The same history always gives byte-identical notes, already in the form `markdown:normalize` writes. An existing `## Unreleased` section is replaced, and its body is kept so notes written before the switch are not lost: whatever follows a **Breaking changes** lead-in there, up to a **Changes** one, comes first in the one **Breaking changes** list, before the generated breaking changes, and the rest of it comes first in the changes, before the generated lines. A kept entry and a generated one that describe the same change both appear. `update` fails when there are no commits to describe.
 
 ```sh
 cargo bake releases:notes Unreleased     # Preview the next section without writing it.
