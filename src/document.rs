@@ -239,7 +239,7 @@ fn lead_in(block: &str) -> Option<bool> {
             if !(1..=6).contains(&(block.len() - title.len())) {
                 return None;
             }
-            title.strip_prefix(' ')?.trim_end_matches('#')
+            title.trim_end_matches('#')
         }
     };
     match title.trim().trim_end_matches(':').to_lowercase().as_str() {
