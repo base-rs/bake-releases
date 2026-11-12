@@ -485,6 +485,10 @@ fn checks_that_only_release_commits_edit_the_document() {
             .is_err()
     );
     assert!(fixture.call("releases:check", &["missing"]).is_err());
+    let error = fixture
+        .call("releases:check", &[&base, "--path", "../outside.md"])
+        .unwrap_err();
+    assert!(error.to_string().contains(": git log"), "{error}");
 
     // A base with no common history cannot be compared.
     fixture.git(&["switch", "--quiet", "--orphan", "unrelated"]);

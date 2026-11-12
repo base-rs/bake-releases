@@ -323,26 +323,25 @@ pub fn check(
         return bake::value(BTreeMap::from([("changed", false), ("release", false)]));
     }
     let path = path.to_string_lossy();
+    let base = history::resolve(context, &base)?;
+    let head = history::resolve(context, &head)?;
+    let editors = history::editors(context, &base, &head, &path)?;
     let changed = history::changes(context, &base, &head, &path)?;
-    let mut release = false;
-    if changed {
-        let editors = history::editors(context, &base, &head, &path)?;
-        let edits: Vec<&str> = editors
-            .iter()
-            .filter(|(_, release)| !release)
-            .map(|(sha, _)| sha.get(..12).unwrap_or(sha))
-            .collect();
-        release = edits.is_empty() && !editors.is_empty();
-        if !release {
-            let commits = if edits.is_empty() {
-                "a merge".to_owned()
-            } else {
-                edits.join(", ")
-            };
-            return Err(Error::new(format!(
-                "{path} is generated from Git history when a release is prepared, so pull requests do not edit it, but {commits} does: revert the change, write the release note as the pull request title, and describe any breaking change in a `Breaking:` paragraph of the description"
-            )));
-        }
+    let edits: Vec<&str> = editors
+        .iter()
+        .filter(|(_, release)| !release)
+        .map(|(sha, _)| sha.get(..12).unwrap_or(sha))
+        .collect();
+    let release = changed && edits.is_empty() && !editors.is_empty();
+    if changed && !release {
+        let commits = if edits.is_empty() {
+            "a merge".to_owned()
+        } else {
+            edits.join(", ")
+        };
+        return Err(Error::new(format!(
+            "{path} is generated from Git history when a release is prepared, so pull requests do not edit it, but {commits} does: revert the change, write the release note as the pull request title, and describe any breaking change in a `Breaking:` paragraph of the description"
+        )));
     }
     bake::value(BTreeMap::from([("changed", changed), ("release", release)]))
 }

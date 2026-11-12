@@ -69,7 +69,6 @@ pub(crate) fn file_at(context: &Context, revision: &str, path: &str) -> Result<S
 
 /// Whether `head` changes `path` relative to its merge base with `base`.
 pub(crate) fn changes(context: &Context, base: &str, head: &str, path: &str) -> Result<bool> {
-    let (base, head) = (resolve(context, base)?, resolve(context, head)?);
     let range = format!("{base}...{head}");
     let path = format!("./{path}");
     let arguments = ["diff", "--quiet", "--no-ext-diff", &range, "--", &path];
@@ -87,7 +86,7 @@ pub(crate) fn editors(
     head: &str,
     path: &str,
 ) -> Result<Vec<(String, bool)>> {
-    let range = format!("{}..{}", resolve(context, base)?, resolve(context, head)?);
+    let range = format!("{base}..{head}");
     let path = format!("./{path}");
     let output = git_text(
         context,
