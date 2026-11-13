@@ -83,6 +83,7 @@ fn update_file_with(
 }
 
 /// The options shared by the tasks that generate notes from Git history.
+#[derive(Default)]
 struct Options {
     since: Option<String>,
     scope: Vec<String>,
@@ -307,14 +308,34 @@ pub fn verify(
     ]))
 }
 
+/// Whether `sha`, whose `Release:` trailer names `version`, leaves `path` exactly
+/// as `releases:update VERSION`, with the options the release hook uses, writes
+/// it from the history of the commit's first parent. A hand edit whose message
+/// carries a copied or forged trailer does not.
+fn writes_generated_notes(context: &Context, sha: &str, version: &str, path: &str) -> bool {
+    let parent = format!("{sha}^1");
+    let expected = history::file_at(context, &parent, path).and_then(|document| {
+        let generated = generate(context, Some(version), &parent, Options::default())?;
+        insert_notes(&document, version, &generated.require_commits()?.notes)
+    });
+    let committed = history::file_at(context, sha, path);
+    matches!((expected, committed), (Ok(expected), Ok(committed)) if expected.lines().eq(committed.lines()))
+}
+
 /// Fail when `head` changes the release document since its merge base with
 /// `base` and any commit making the change, merges aside, is not a release
-/// commit, since release notes are generated from Git history. `head` may be
-/// GitHub's pull request or merge queue merge commit.
+/// commit, since release notes are generated from Git history. A release commit
+/// carries a `Release: VERSION` trailer and writes exactly the notes generated
+/// for `VERSION` from its first parent's history, so a trailer alone, which any
+/// commit message or pull request description can carry, is not enough. `head`
+/// may be GitHub's pull request or merge queue merge commit, or the new tip of
+/// a branch after a push, with `base` the tip before it.
 #[bake::task]
 pub fn check(
     context: &mut Context,
-    #[bake(help = "The pull request's base revision; empty or all zeros checks nothing.")]
+    #[bake(
+        help = "The base revision: the pull request's or merge queue's base, or the branch's tip before a push; empty or all zeros checks nothing."
+    )]
     base: String,
     #[bake(default = "HEAD")] head: String,
     #[bake(default = "releases.md")] path: PathBuf,
@@ -327,20 +348,28 @@ pub fn check(
     let head = history::resolve(context, &head)?;
     let editors = history::editors(context, &base, &head, &path)?;
     let changed = history::changes(context, &base, &head, &path)?;
-    let edits: Vec<&str> = editors
+    let edits: Vec<(&str, bool)> = editors
         .iter()
-        .filter(|(_, release)| !release)
-        .map(|(sha, _)| sha.get(..12).unwrap_or(sha))
+        .filter(|(sha, release)| {
+            release.is_empty() || !writes_generated_notes(context, sha, release, &path)
+        })
+        .map(|(sha, release)| (sha.get(..12).unwrap_or(sha), !release.is_empty()))
         .collect();
     let release = changed && edits.is_empty() && !editors.is_empty();
     if changed && !release {
         let commits = if edits.is_empty() {
             "a merge".to_owned()
         } else {
-            edits.join(", ")
+            let shas: Vec<&str> = edits.iter().map(|(sha, _)| *sha).collect();
+            shas.join(", ")
+        };
+        let trailer = if edits.iter().any(|(_, trailer)| *trailer) {
+            "; a `Release:` trailer counts only on a commit whose notes are the ones `releases:update` generates"
+        } else {
+            ""
         };
         return Err(Error::new(format!(
-            "{path} is generated from Git history when a release is prepared, so pull requests do not edit it, but {commits} does: revert the change, write the release note as the pull request title, and describe any breaking change in a `Breaking:` paragraph of the description"
+            "{path} is generated from Git history when a release is prepared, so pull requests do not edit it, but {commits} does: revert the change, write the release note as the pull request title, and describe any breaking change in a `Breaking:` paragraph of the description{trailer}"
         )));
     }
     bake::value(BTreeMap::from([("changed", changed), ("release", release)]))

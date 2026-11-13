@@ -1,6 +1,6 @@
 # Release Notes
 
-`releases.md` is generated from Git history when a release is prepared, so do not edit it in a pull request. `releases:check` fails a pull request that does.
+`releases.md` is generated from Git history when a release is prepared, so do not edit it in a pull request. `releases:check` fails a pull request that does, even one whose commits or description carry a `Release:` trailer: only a commit that writes exactly the generated notes counts as a release.
 
 - **The pull request title is the release note.** A squash merge makes it the commit subject, which becomes one line of the next version's notes, verbatim and linked to the pull request. Write it as a clear, complete sentence about what changed for users, ending in a period.
 - **Breaking changes go in the description.** Add a paragraph beginning `Breaking:`, in any case, that says what breaks and how to migrate. Each such paragraph is listed under **Breaking changes** at the top of the version's notes. It may sit anywhere in the description, and a description may have several.
