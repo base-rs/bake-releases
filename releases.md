@@ -1,5 +1,9 @@
 # Releases
 
+## v0.3.12
+
+- Count a `Release:` trailer in `releases:check` only on a commit that writes exactly the generated release notes, so a hand edit cannot pass by copying it. ([#39](https://github.com/base-rs/bake-releases/pull/39))
+
 ## v0.3.11
 
 - Write one Breaking changes list when the kept `## Unreleased` body has its own, kept entries first, then the generated ones. ([#37](https://github.com/base-rs/bake-releases/pull/37))
