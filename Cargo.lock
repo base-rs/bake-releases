@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "bake-releases"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "bake",
  "base-markdown",
