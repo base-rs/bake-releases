@@ -267,12 +267,10 @@ fn writes_one_breaking_changes_list_with_kept_breaking_changes() {
         );
         let verified = fixture.call("releases:verify", &["v0.2.0", "--since", &since]);
         assert!(verified.is_ok(), "{case}: {verified:?}");
-        let checked = fixture.call("releases:check", &[&base]).unwrap();
-        assert_eq!(
-            checked,
-            serde_json::json!({"changed": true, "release": true}),
-            "{case}"
-        );
+        // The check judges a release by the notes the hook generates, which
+        // start at the previous tag.
+        let checked = fixture.call("releases:check", &[&base]);
+        assert_eq!(checked.is_ok(), generated, "{case}: {checked:?}");
     }
 }
 
@@ -571,6 +569,100 @@ fn checks_that_only_release_commits_edit_the_document() {
     fixture.git(&["switch", "--quiet", "main"]);
     let error = fixture.call("releases:check", &[&unrelated]).unwrap_err();
     assert!(error.to_string().contains(": git diff"), "{error}");
+}
+
+#[test]
+fn a_release_trailer_counts_only_on_generated_notes() {
+    let fixture = Fixture::new(RELEASES);
+    let base = fixture.git(&["rev-parse", "HEAD"]);
+    let forged_error = |fixture: &Fixture, base: &str, sha: &str| {
+        let error = fixture.call("releases:check", &[base]).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(&sha[..12]), "{message}");
+        assert!(
+            message.contains("a `Release:` trailer counts only"),
+            "{message}"
+        );
+    };
+
+    // A pull request's own commit with a forged trailer.
+    let edited = format!("{RELEASES}- By hand.\n");
+    let forged = fixture.commit(
+        &[("releases.md", &edited)],
+        "Edit the notes by hand. (#12)\n\nRelease: v0.2.0",
+    );
+    forged_error(&fixture, &base, &forged);
+
+    // The squash of such a pull request on main, whose description carried the
+    // trailer, checked after the push against main's tip before it.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    let squash = fixture.commit(
+        &[("releases.md", &edited)],
+        "Edit the notes by hand. (#12)\n\nRelease: v0.2.0",
+    );
+    forged_error(&fixture, &base, &squash);
+
+    // Generated notes with a hand edit elsewhere in the document.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    fixture.call("releases:update", &["v0.2.0"]).unwrap();
+    let generated = fixture.releases();
+    let tampered = generated.replace("- First.", "- First, and more.");
+    let tampered = fixture.commit(
+        &[("releases.md", &tampered)],
+        "Bump minor version.\n\nRelease: v0.2.0",
+    );
+    forged_error(&fixture, &base, &tampered);
+
+    // Generated notes under a trailer naming another version.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    let other = fixture.commit(
+        &[("releases.md", &generated)],
+        "Bump minor version.\n\nRelease: v0.3.0",
+    );
+    forged_error(&fixture, &base, &other);
+
+    // A trailer naming a version the document already has.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    let existing = fixture.commit(
+        &[("releases.md", &edited)],
+        "Bump minor version.\n\nRelease: v0.1.0",
+    );
+    forged_error(&fixture, &base, &existing);
+
+    // A trailer on a commit that deletes the document.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    fixture.git(&["rm", "--quiet", "releases.md"]);
+    let deleted = fixture.commit(&[], "Bump minor version.\n\nRelease: v0.2.0");
+    forged_error(&fixture, &base, &deleted);
+
+    // A trailer with nothing to release since the previous tag.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    fixture.git(&["tag", "v0.1.5"]);
+    let empty = fixture.commit(
+        &[("releases.md", &edited)],
+        "Bump minor version.\n\nRelease: v0.2.0",
+    );
+    forged_error(&fixture, &base, &empty);
+    fixture.git(&["tag", "--delete", "v0.1.5"]);
+
+    // A trailer on a commit that adds the document, whose parent has none.
+    let bare = Fixture::empty();
+    let start = bare.commit(&[("Cargo.toml", MANIFEST)], "Initial commit.");
+    let added = bare.commit(
+        &[("releases.md", RELEASES)],
+        "Bump minor version.\n\nRelease: v0.1.0",
+    );
+    forged_error(&bare, &start, &added);
+
+    // The real release passes, until the manifest it is judged by is broken.
+    fixture.git(&["reset", "--quiet", "--hard", &base]);
+    let release = fixture.release("v0.2.0");
+    assert_eq!(
+        fixture.call("releases:check", &[&base]).unwrap(),
+        serde_json::json!({"changed": true, "release": true})
+    );
+    fixture.write("Cargo.toml", "[package\n");
+    forged_error(&fixture, &base, &release);
 }
 
 #[test]

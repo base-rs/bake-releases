@@ -40,7 +40,7 @@ cargo bake releases:verify v0.2.0 --sha "$CANDIDATE"
 cargo bake releases:check "$BASE"
 ```
 
-`releases:verify` regenerates the section from the history of the candidate's first parent, which for a squash or merge candidate is the target branch, and fails unless it matches the committed `## vX.Y.Z` section. This catches hand edits and features merged after the release was prepared. `releases:check BASE` fails when `HEAD` (or `--head REV`) changes `releases.md` since its merge base with `BASE` and a commit making the change, merges aside, has no `Release:` trailer. Run it in pull request and merge queue CI, where `HEAD` may be GitHub's merge commit.
+`releases:verify` regenerates the section from the history of the candidate's first parent, which for a squash or merge candidate is the target branch, and fails unless it matches the committed `## vX.Y.Z` section. This catches hand edits and features merged after the release was prepared. `releases:check BASE` fails when `HEAD` (or `--head REV`) changes `releases.md` since its merge base with `BASE` and a commit making the change, merges aside, is not a release commit. A release commit has a `Release: vX.Y.Z` trailer and leaves `releases.md` exactly as `releases:update vX.Y.Z` writes it from the history of the commit's first parent, with the manifest's options, so a trailer copied into a hand edit's message or a pull request description does not count. Run it in pull request and merge queue CI, where `HEAD` may be GitHub's merge commit, and on pushes with the branch's tip before the push as `BASE`, which checks what the squash merge landed.
 
 ## Document format
 

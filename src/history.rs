@@ -77,7 +77,8 @@ pub(crate) fn changes(context: &Context, base: &str, head: &str, path: &str) -> 
 }
 
 /// The commits reachable from `head` but not `base`, other than merges, that
-/// change `path`, each with whether it carries a `Release:` trailer. Merges are
+/// change `path`, each with the value of its `Release:` trailer, empty when it
+/// has none. Merges are
 /// skipped so that GitHub's pull request merge commit, or a merge queue's, is
 /// judged by the commits it brings in.
 pub(crate) fn editors(
@@ -85,7 +86,7 @@ pub(crate) fn editors(
     base: &str,
     head: &str,
     path: &str,
-) -> Result<Vec<(String, bool)>> {
+) -> Result<Vec<(String, String)>> {
     let range = format!("{base}..{head}");
     let path = format!("./{path}");
     let output = git_text(
@@ -107,7 +108,7 @@ pub(crate) fn editors(
         .filter(|record| !record.is_empty())
         .map(|record| {
             let (sha, release) = record.split_once(FIELD).unwrap_or((record, ""));
-            (sha.to_owned(), !release.trim().is_empty())
+            (sha.to_owned(), release.trim().to_owned())
         })
         .collect())
 }
